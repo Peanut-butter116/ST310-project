@@ -1,0 +1,348 @@
+---
+title: "eda+training models"
+author: "chunhua he"
+date: "2025-05-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+setwd('/Users/hch/desktop/vivii/')
+
+library(tidyverse)
+library(tidymodels)
+library(broom)
+library(kableExtra)
+library(yardstick) 
+library(pROC)
+library(corrplot)
+library(dplyr)
+library(vip)
+library(rpart.plot)
+library(xgboost)
+library(randomForest)
+library(glmnet)
+theme_set(theme_minimal())
+
+# clear workspace 
+rm(list = ls())
+
+# load data
+hmeq <- read_csv("hmeq.csv")
+```
+
+## EDA
+
+```{r eda-data_structure}
+# summarise basic info of all variables
+head(hmeq)
+summary(hmeq)
+str(hmeq)
+```
+
+```{r eda-coping with categorical factors}
+# Convert character to factor
+hmeq <- hmeq %>%
+  mutate(
+    BAD    = as.factor(BAD),
+    REASON = as.factor(REASON),
+    JOB    = as.factor(JOB)
+  )
+```
+
+```{r eda-BAD_distribution}
+# distribution of target variable
+hmeq %>%
+  count(BAD) %>%
+  ggplot(aes(x = BAD, y = n, fill = BAD)) +
+    geom_col() +
+    labs(title = "Distribution of target variable - BAD", x = "BAD", y = "Frequency") +
+    theme_minimal()
+
+```
+
+```{r eda-nums_distribution}
+# numeric variables
+numeric_vars <- hmeq %>% select(where(is.numeric)) %>% names()
+
+hmeq %>%
+  select(all_of(numeric_vars)) %>%
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value") %>%
+  ggplot(aes(x = value)) +
+    facet_wrap(~ variable, scales = "free", ncol = 3) +
+    geom_histogram(bins = 30, color = "white", fill = "gray") +
+    labs(title = "Distribution of numeric variables", x = NULL, y = "Frequency") +
+    theme_minimal()
+```
+
+The histograms show that none of the numeric variables obey a normal distribution. Most features are heavily right‐skewed with long tails. To address this, we will apply normalization to put all predictors on a similar scale, and we should also consider a log transform.
+
+```{r cats_distribution}
+# categorical variables
+categorical_vars <- hmeq %>% 
+  select(where(is.factor)) %>% 
+  select(-BAD) %>%    # exclude target because it has been shown before
+  names()
+
+hmeq %>%
+  select(all_of(categorical_vars)) %>%
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value") %>%
+  count(variable, value) %>%
+  ggplot(aes(x = value, y = n, fill = variable)) +
+    facet_wrap(~ variable, scales = "free", ncol = 2) +
+    geom_col(show.legend = FALSE) +
+    labs(title = "Distribution of categorical variables", x = NULL, y = "Frequency") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r eda-checking_NAs}
+# missing values
+missing_values <- hmeq %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "NAs")
+
+print(missing_values)
+```
+
+Oops, there're plenty of NAs in the original dataset, if we drop them directly, a large fraction of the data will be lost. We should consider the imputation for both numeric and categorical variables when fitting the models.
+
+```{r eda-correlation_between_nums}
+# correlation between numeric predictors
+num_df <- hmeq %>% 
+  select(all_of(numeric_vars)) %>% 
+  drop_na()
+
+corr <- cor(num_df)
+corrplot(corr, method = "color", type = "lower", tl.cex = 0.8)
+```
+
+The correlation heatmap shows several relationships among the numeric variables. These observed correlations justify our decision to include interaction terms in the high‐dimensional Lasso model. By adding pairwise products of related variables, we give the model a chance to capture joint effects that simple main‐effect terms might miss.
+
+## Interpretable model: Decision Tree
+
+In the hmeq dataset, the scenario of predictive models just fit a decision of whether to grant a load, so we decide to build a **decision tree model**, because it is simple, fully interpretable, and can automatically discover non‐linear splits. It serves as a clear, non‐baseline model that we can easily visualize and explain.
+
+```{r decision_tree}
+# split dataset into training & testing subsets
+set.seed(123)
+data_split <- initial_split(hmeq, prop = 0.8, strata = BAD)
+train_data <- training(data_split)
+test_data  <- testing(data_split)
+
+# build a data preprocessing recipe (also work for other models)
+hmeq_recipe <- recipe(BAD ~ ., data = train_data) %>%
+  step_impute_median(all_numeric_predictors()) %>%   # median imputation for numeric variables
+  step_impute_mode(all_nominal_predictors()) %>%     # mode imputation for factors
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>% # create dummies
+  step_normalize(all_numeric_predictors())
+
+# tree model
+tree_spec <- decision_tree(
+  mode = "classification",
+  tree_depth = tune() ) %>%
+  set_engine("rpart")
+
+# create workflow
+tree_wf <- workflow() %>%
+  add_recipe(hmeq_recipe) %>%
+  add_model(tree_spec)
+
+# cross-validation
+cv_folds <- vfold_cv(train_data, v = 5, strata = BAD)
+
+# grid tunning
+tree_grid <- grid_regular(
+  tree_depth(range = c(1, 10)),        # depth from 1 to 10
+  levels = 5
+)
+
+tree_res <- tune_grid(
+  tree_wf,
+  resamples = cv_folds,
+  grid      = tree_grid,
+  metrics   = metric_set(roc_auc, accuracy)
+)
+
+# select best parameters by ROC AUC
+best_tree_params <- select_best(tree_res, metric = "roc_auc")
+
+# final model
+final_tree_wf <- finalize_workflow(tree_wf, best_tree_params)
+
+tree_fit <- last_fit(final_tree_wf, data_split)
+
+# performance metrics
+collect_metrics(tree_fit)
+
+# visualize the final tree
+final_tree <- tree_fit %>% extract_fit_engine()
+rpart.plot(final_tree, main = "Final Decision Tree")
+```
+
+As the tree shows, the most important feature is DELINQ, which seperates the tree into left and right branches. The overall default rate is 20%. Based on whether DELINQ \< 0.084, for borrowers with no or almost no past delinquencies (80%), the default rate is 14%, while for those with any delinquency history (20%), it jumps to 45%.
+
+In the left branch, the next feature is DEBTINC \< 1.6. When DEBTINC \< 1.6 (79% of that branch), the default rate is 13%; when DEBTINC ≥ 1.6 (21%), it rises to 19%. That higher‐DEBTINC group then splits on CLAGE, the lower-subgroup has a 29% default rate, and the higher-subgroup has a 61% default rate.
+
+In the right branch, the second feature is DEBTINC \< 0.11, the very low‐DEBTINC subgroup (15%) defaults 56% of the time; the rest (85%) defaults at 24%. That 24% node further splits on DEBTINC \< 1.3, the lower‐DEBTINC group (6%) has an 18% default rate, and the very high‐DEBTINC group (1%) has a 96% default rate, while the remaining cases (8%) default 82%.
+
+Further, when we look into the importance of every variable, the plot shows that DEBTINC is by far the most important predictor of default in our model. DELINQ is the second most important, and CLAGE ranks third. Following these, DEROG, VALUE, and LOAN each contribute moderately to the model. Finally, CLNO , NINQ , YOJ , and MORTDUE have smaller but nonzero importance.
+
+```{r decision_tree_vip}
+# plot important features
+final_tree %>%
+  vip(geom = "col", aesthetics = list(fill = "midnightblue", alpha = 0.8)) +
+  scale_y_continuous()
+```
+
+## High-dim model: Lasso regression
+
+We built a high‐dimensional Lasso regression model. In our preprocessing recipe, we applied a log transform to every numeric variable. To increase dimensionality, we generated all pairwise interactions among numeric predictors. After grid tunning, the final Lasso model achieved an accuracy of 0.858, an ROC AUC of 0.831 on the test data.
+
+```{r lasso_regression}
+# define a recipe that expands features
+highdim_rec <- recipe(BAD ~ ., data = train_data) %>%
+  # impute missing values
+  step_impute_median(all_numeric_predictors()) %>%   # median imputation for numeric variables
+  step_impute_mode(all_nominal_predictors()) %>%     # mode imputation for factors
+  # create dummies for categorical variables
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>% 
+  # add log-transform numeric vars
+  step_log(all_numeric_predictors(), offset = 1) %>% # avoiding log(0)
+  # create all interactions among numeric predictors
+  step_interact(terms = ~ all_numeric_predictors():all_numeric_predictors()) %>%
+  # zero‐variance & normalization
+  step_zv(all_predictors()) %>%
+  step_normalize(all_predictors())
+
+# specify a Lasso regression model
+lasso_spec <- logistic_reg(
+  mode    = "classification",
+  penalty = tune(),
+  mixture = 1
+) %>%
+  set_engine("glmnet")
+
+# create the workflow
+lasso_wf <- workflow() %>%
+  add_recipe(highdim_rec) %>%
+  add_model(lasso_spec)
+
+# grid tunning
+penalty_grid <- grid_regular(
+  penalty(range = c(-5, -1)),
+  levels = 30)
+
+lasso_res <- tune_grid(
+  lasso_wf,
+  resamples = cv_folds,
+  grid      = penalty_grid,
+  metrics   = metric_set(roc_auc, accuracy)
+)
+
+# select the best penalty by ROC AUC
+best_pen <- select_best(lasso_res, metric = "roc_auc")
+
+# final model
+final_lasso <- finalize_workflow(lasso_wf, best_pen) %>% last_fit(data_split)
+
+# performance metrics
+collect_metrics(final_lasso)
+
+# plot top 20 selected features
+vip(lasso_fit, num_features = 20, geom = "point") +
+  labs(title = "Top 20 Features")
+```
+
+We further revealed 20 features retained by Lasso. The most important was the interaction between LOAN and VALUE. Other top predictors included the main effects LOAN and VALUE, CLAGE, and REASON_DebtCon. Several interaction terms also contributed substantially, such as LOAN × DELINQ and DELINQ × DEBTINC.
+
+However, it is noticed that the performance metrics of Lasso is not as strong as the decision tree. Perhaps it is because that lasso, as a linear model, only draws straight boundaries to separate default and no-default cases, even we've added some interaction and log-transformed terms. On the other hand, a decision tree could capture more complex, non-linear patterns in the data. As a result, the tree model achieves higher performance than the Lasso model.
+
+## A prediction competition winner model:
+
+To win the prediction competition, we fit two models (i.e,,random forest and XGBoost) to focus purely on predictive accuracy.
+
+```{r random_forest}
+# model specification 
+rf_spec <- rand_forest(
+  mode    = "classification",
+  trees   = 500,
+  mtry    = tune(),  
+  min_n   = tune()
+) %>%
+  set_engine("randomForest")
+
+# create workflow
+rf_wf <- workflow() %>%
+  add_recipe(hmeq_recipe) %>%
+  add_model(rf_spec)
+
+# grid tunning
+rf_grid <- grid_regular(
+  mtry(range = c(5, 18)),
+  min_n(range = c(1, 10)),
+  levels = 5
+)
+
+rf_res <- tune_grid(
+  rf_wf,
+  resamples = cv_folds,
+  grid      = rf_grid,
+  metrics   = metric_set(accuracy, roc_auc)
+)
+
+# select best by accuracy
+best_rf <- select_best(rf_res, metric = "accuracy")
+
+# final model
+final_rf <- finalize_workflow(rf_wf, best_rf) %>% last_fit(data_split)
+
+# performance metrics
+collect_metrics(final_rf)
+```
+
+The random forest model gets an accuracy of 0.9220 and its ROC_AUC is 0.9627, indicating an excellent classification accuracy and reliable predictions.
+
+```{r xgboost}
+#XGBoost
+# model specification
+xgb_spec <- boost_tree(
+  mode        = "classification",
+  trees       = 500,
+  tree_depth  = tune(),
+  learn_rate  = tune(),
+  loss_reduction = tune()
+) %>%
+  set_engine("xgboost")
+
+# create workflow
+xgb_wf <- workflow() %>%
+  add_recipe(hmeq_recipe) %>%
+  add_model(xgb_spec)
+
+# grid tunning
+xgb_grid <- grid_regular(
+  tree_depth(range = c(3, 10)),
+  learn_rate(range = c(0.001, 0.1)),
+  loss_reduction(range = c(0.001, 10)),
+  levels = 5
+)
+
+xgb_res <- tune_grid(
+  xgb_wf,
+  resamples = cv_folds,
+  grid = xgb_grid,
+  metrics = metric_set(accuracy, roc_auc)
+)
+
+# select best by accuracy
+best_xgb <- select_best(xgb_res, metric = "accuracy")
+
+# final model
+final_xgb <- finalize_workflow(xgb_wf, best_xgb) %>% last_fit(data_split)
+
+# performance metrics
+collect_metrics(final_xgb)
+```
+
+The XGBoost model achieved an accuracy of 0.9195 and a ROC_AUC of 0.9396, while slightly lower than RF model, it also performed well.

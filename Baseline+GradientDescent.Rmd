@@ -1,0 +1,185 @@
+---
+title: "Baseline Model + Own Gradient Descent"
+output: html_notebook
+---
+
+## Setup
+
+1.  Drop any row with NA
+2.  Turn outcome into a factor (0 = no default, 1 = default)
+
+```{r setup}
+library(tidyverse)
+library(tidymodels)
+library(broom)
+library(kableExtra)
+library(yardstick) 
+library(pROC)
+
+hmeq <- read_csv("hmeq.csv") %>% 
+  drop_na() %>% # remove any row with missing data
+  mutate(
+    BAD    = factor(BAD, levels = c(0, 1), labels = c("no","yes")), 
+    # ensure target is factor
+    REASON = factor(REASON),# convert REASON (char) → factor
+    JOB    = factor(JOB)# convert JOB (char) → factor
+  )
+```
+
+## Baseline Model
+
+We begin with a **logistic‐regression** baseline. We chose it for its interpretability and natural fit to our binary “default” outcome, so that we can immediately see how each factor drives the odds of loan failure. Rather than hand‐picking a few features, we use every cleaned predictor in the HMEQ data. That means all continuous financial signals (loan amount, property value, credit‐history length, debt ratios, delinquency counts, etc.) and the two categorical fields REASON (loan purpose) and JOB (employment category), which we’ve converted to factors and dummy‐encoded. By pooling both quantitative metrics and qualitative risk signals, we capture the full spectrum of borrower characteristics that a lender would consider at first glance. We normalize all numeric inputs so each variable contributes on a comparable scale, then let the regression estimate which dimensions—say, a short credit history versus a high‐risk job—most sharply raise default odds. We expect moderate accuracy (around 55–65%), furnishing a transparent benchmark against which to gauge more complex learners, while mirroring a real‐world credit‐scoring “first‐look” that weighs both hard numbers and borrower profiles.
+
+```{r baseline-model, message=FALSE, warning=FALSE}
+# Specify a preprocessing recipe
+rec <- recipe(BAD ~ ., data = hmeq) %>% 
+  step_dummy(all_nominal_predictors()) %>%    # turn all factor predictors into dummies
+  step_normalize(all_numeric_predictors())    # scale & center numeric predictors
+
+# Define a baseline logistic‐regression model
+log_spec <- logistic_reg(mode = "classification") %>%            # logistic regression model
+  set_engine("glm")                                          
+
+# Bundle into a workflow and fit 
+baseline_wf <- workflow() %>%                              
+  add_recipe(rec) %>%                                  
+  add_model(log_spec)                          
+
+baseline_fit <- fit(baseline_wf, data = hmeq)             # fit model to cleaned data
+
+# Extract and tidy the fitted model 
+model_fit      <- pull_workflow_fit(baseline_fit)               # extract the parsnip object
+
+# Get class and probability predictions, plus the true outcome
+preds <- baseline_fit %>% 
+  predict(new_data = hmeq, type = "prob") %>%      # .pred_no & .pred_yes
+  bind_cols(predict(baseline_fit, new_data = hmeq, type = "class")) %>%  # .pred_class
+  bind_cols(hmeq %>% select(BAD))                  # true BAD
+
+# Compute four summary metrics on these predictions
+baseline_tbl <- preds %>% 
+  summarise(
+    Accuracy    = accuracy_vec(truth = BAD, estimate = .pred_class),   # overall correct rate
+    AUC         = roc_auc_vec(truth = BAD, .pred_yes),                # area under ROC
+    Sensitivity = sens_vec(truth = BAD, estimate = .pred_class),      # true‐positive rate
+    Specificity = spec_vec(truth = BAD, estimate = .pred_class)       # true‐negative rate
+  )
+
+# Print as a table
+baseline_tbl %>% 
+  kable(digits = 3, format = "html") %>% 
+  kable_styling(full_width = FALSE)
+
+```
+
+Even though our baseline model shows a high accuracy of 92.6%, it’s really just predicting “no default” almost all the time, so it hardly learns anything meaningful. It catches good loans almost perfectly (99.4% sensitivity) but only identifies 23% of the actual defaults (specificity), and its AUC of 0.199 tells us its ranking of risky versus safe loans is worse than random. This teaches us that with so many more non-defaults, accuracy alone tricks us. We need to focus on metrics like AUC, recall for the minority class, and precision-recall curves. As a first glance, our logistic baseline confirms that numeric and factor inputs alone, with a naïve cutoff, are insufficient to identify credit risk. But it does give us a clear benchmark—and highlights exactly where to focus our modelling refinements.
+
+## Gradient Descent Model
+
+We’ll fit a simple **logistic‐regression** model with our own gradient‐descent optimizer, using the **binary cross‐entropy** loss:
+
+$$
+L(\theta) = -\frac{1}{n}\sum_{i=1}^n \Bigl[y_i\log\sigma(\theta^\top x_i) + (1 - y_i)\log\bigl(1 - \sigma(\theta^\top x_i)\bigr)\Bigr],
+$$
+
+where $\sigma(z)=\frac{1}{1+e^{-z}}$ is the sigmoid function. The gradient is
+
+$$
+\nabla L(\theta)
+= \frac{1}{n}\,X^\top\bigl(\sigma(X\theta) - y\bigr),
+$$
+
+which clearly depends on $\theta$ (so it’s **not constant**) and drives each update. We chose this loss function as it exactly matches the binary‐likelihood objective, sharply penalises over-confident errors, and yields updates that depend on how well the model currently fits each example rather than constant squared‐error.
+
+However, here requires arithmetic on $y$. If BAD were a factor, subtraction $\sigma(X\theta)-y$ would fail. Using numeric $y$ lets us compute $(p_i - y_i)$ directly, drive the updates, and measure probability errors smoothly. Similarly, to ensure smooth calculation, we'll only include numeric predictors in the design matrix $X$.
+
+```{r gradient-descent-model, message=FALSE, warning=FALSE}
+# Extract the numeric 0/1 target y from BAD
+hmeq <- read_csv("hmeq.csv")%>%drop_na()
+y <- as.numeric(hmeq$BAD)   # ensure BAD is numeric (0/1) for gradient calcs
+
+# Build the design matrix X with an intercept + all numeric predictors
+num_vars    <- hmeq %>% select(where(is.numeric), -BAD)
+
+# Center & scale each column to mean 0 and SD 1
+scaled_num  <- scale(num_vars)
+X <- cbind(
+  intercept = 1,
+  as.matrix(scaled_num)
+)
+n <- nrow(X)                                         # number of observations
+
+# Define the sigmoid function σ(z) = 1/(1 + e^(−z))
+sigmoid <- function(z) {
+  1 / (1 + exp(-z))
+}
+
+# Initialize parameters and hyperparameters
+theta <- rep(0, ncol(X))    # start all coefficients at zero
+alpha <- 0.001               # learning rate
+iters <- 100               # number of gradient‐descent iterations
+
+# Run gradient descent to minimize binary cross‐entropy
+for (i in seq_len(iters)) {
+  p    <- sigmoid(X %*% theta)        # predicted probability for each row
+  grad <- t(X) %*% (p - y) / n        # gradient: Xᵀ(p − y) / n
+  theta <- theta - alpha * grad       # update rule: θ ← θ − α · grad
+}
+
+# Make predictions on the training set
+p_pred     <- sigmoid(X %*% theta)                           # numeric probabilities
+
+# Assemble a tibble for yardstick metrics
+results <- tibble(
+  truth      = factor(y, levels = c(0,1), labels = c("no","yes")),             # true class
+  .pred_yes  = p_pred,                                                          # prob of default
+  .pred_class= factor(ifelse(p_pred > 0.5, "yes", "no"), levels = c("no","yes"))# predicted class
+)
+
+#table(results$.pred_class)
+
+```
+
+```{r gradient-descent-metrics, message=FALSE, warning=FALSE}
+# 1. True positive, true negative, false positive, false negative
+tp <- sum(results$.pred_class == "yes" & results$truth == "yes")
+tn <- sum(results$.pred_class == "no"  & results$truth == "no")
+fp <- sum(results$.pred_class == "yes" & results$truth == "no")
+fn <- sum(results$.pred_class == "no"  & results$truth == "yes")
+
+# 2. Sensitivity & specificity
+sensitivity <- tp / (tp + fn)
+specificity <- tn / (tn + fp)
+
+# 3. Accuracy & AUC
+accuracy <- mean(results$.pred_class == results$truth)
+
+roc_obj <- roc(
+  response  = results$truth,
+  predictor = results$.pred_yes,
+  levels    = c("no", "yes"),   # first = control, second = case
+  direction = "<"               # ensures higher scores → more likely “yes”
+)
+
+auc_val <- as.numeric(auc(roc_obj))
+
+
+# 4. Build a one‐row summary table
+metrics_tbl <- tibble(
+  Accuracy    = accuracy,
+  AUC         = auc_val,
+  Sensitivity = sensitivity,
+  Specificity = specificity
+)
+
+# 5. Print it
+metrics_tbl %>%
+  kable(digits = 3, format = "html") %>%
+  kable_styling(full_width = FALSE)
+
+
+```
+
+Our custom cross‐entropy model yields **92% accuracy**, an **AUC of 0.783**, **17% sensitivity** and **99% specificity**. There is a big step up from our naïve baseline that reported 92.6% accuracy but only 23% specificity and an AUC of 0.199 by including all predictors. Although overall accuracy fell, this new model truly learns patterns in the data: it now ranks defaulters much better (AUC → 0.783).
+
+Again, we should keep balancing metrics rather than chasing raw accuracy, tune our decision threshold (it needn’t be 0.5), add regularisation or early stopping to prevent over/under‐shooting, and consider richer learners (e.g. penalised logistic, tree-based or ensemble methods) to capture non-linear risk signals and further improve both sensitivity and specificity.
