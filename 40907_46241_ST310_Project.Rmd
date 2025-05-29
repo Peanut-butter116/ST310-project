@@ -2,12 +2,13 @@
 title: "ST310: Group Project"
 subtitle: "A Prediction Challenge on HMEQ Data: Predicting Clients Who Default on Their Loan"
 date:  "`r format(Sys.time(), '%a/%d/%b')`"
-author: "40907 | "
+author: "40907 | 46241"
 always_allow_html: true
 output: 
   bookdown::pdf_document2:
     toc: false
 ---
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
 #setwd('...')
@@ -35,27 +36,28 @@ hmeq <- read_csv("hmeq.csv")
 
 ```
 
-
 # Introduction
 
 The [HMEQ dataset](https://www.kaggle.com/datasets/ajay1735/hmeq-data?resource=download) contains information about home equity loans, including borrower characteristics and loan details. The goal of this project is to predict whether a client will default on their loan based on these features. We will explore the data, build baseline models, and then apply more complex machine learning techniques to improve our predictions.
 
 Our primary motivating question is: *which mix of these quantitative and qualitative indicators most powerfully predicts default risk*, enabling an early, transparent screening of high-risk applicants.
 
-To illuminate this, we first implemented a **custom logistic-regression via gradient descent** which is valued for its step-by-step interpretability, but our final, more sophisticated learner is an **XGBoost classifier**, chosen because of its ability to model non-linear interactions and handle heterogeneous feature sets. While HMEQ has served as a benchmark for many “black-box” solutions, our work is unique in students' perspectives, directly contrasting a hand-crafted optimizer with XGBoost and in rigorously evaluating model performance across a suite of metrics to address class imbalance and reflect real-world credit-risk trade-offs. A key challenge lies in metric selection: although Accuracy is widely used, AUC-ROC may offer more actionable insights when there is class imbalance.
+To illuminate this, we first implemented a **custom logistic-regression via gradient descent** which is valued for its step-by-step interpretability, but our final, more sophisticated learner is a **Random Forest classifier**, chosen because of its ability to model non-linear interactions and handle heterogeneous feature sets. While HMEQ has served as a benchmark for many “black-box” solutions, our work is unique in students' perspectives, directly contrasting a hand-crafted optimizer with complex models and in rigorously evaluating model performance across a suite of metrics to address class imbalance and reflect real-world credit-risk trade-offs. A key challenge lies in metric selection: although Accuracy is widely used, AUC-ROC may offer more actionable insights when there is class imbalance.
 
-Our report contains the following sections:
-- [Exploratory Data Analysis](## EDA): A detailed analysis of the dataset, including summary statistics and visualizations.
-- [Baseline Model](## Baseline Model): A logistic regression model to establish a baseline performance.
-- [Gradient Descent Model](## Gradient Descent Model): A custom logistic regression model using cross entropy gradient descent.
-- [Interpretable Model](## Interpretable model: Decision Tree): A decision tree model to provide insights into feature importance.
-- [High-dim Model](## High-dim model: Lasso regression): A Lasso regression model to exam interactions between features.
-- [Prediction Winner Model](## A prediction competition winner model:): We fit two models (i.e,,random forest and XGBoost) to focus purely on predictive accuracy.
-- [Conclusion](# Conclusion): A summary of findings and recommendations for future work.
-- [Code Appendix](# Code appendix): A complete code listing for reproducibility. Some useful code chunks are also shown in-line.
+Our report contains the following sections: 
 
-## EDA
-```{r eda-data_structure eval=FALSE}
+- **Exploratory Data Analysis**: A detailed analysis of the dataset, including summary statistics and visualizations.
+- **Baseline Model**: A logistic regression model to establish a baseline performance.
+- **Gradient Descent Model**: A custom logistic regression model using cross entropy gradient descent.
+- **Interpretable Model**: A decision tree model to provide insights into feature importance.
+- **High-dim Model**: A Lasso regression model to exam interactions between features.
+- **Prediction Winner Model**: We fit two models (i.e,,random forest and XGBoost) to focus purely on predictive accuracy.
+- **Conclusion**: A summary of findings and recommendations for future work.
+- **Code Appendix**: A complete code listing for reproducibility.
+
+# Exploratory Data Analysis
+
+```{r eda-data-structure, eval=FALSE}
 ################################################################################
 # summarise basic info of all variables
 #head(hmeq)
@@ -76,11 +78,11 @@ hmeq <- hmeq %>%
 
 ```
 
-During initial data exploration, we found that the Home Equity dataset comprises baseline and loan-performance information for **5,960** recent home-equity loans, each described by **13** variables including continuous financial metrics (loan amount, mortgage due, property value, debt-to-income ratio, credit-history age, delinquency counts) and two categorical fields: REASON (loan purpose) and JOB (employment category). Therefore, we converted the categorical variables to factors and dummy-encoded them for modeling. 
+During initial data exploration, we found that the Home Equity dataset comprises baseline and loan-performance information for **5,960** recent home-equity loans, each described by **13** variables including continuous financial metrics (loan amount, mortgage due, property value, debt-to-income ratio, credit-history age, delinquency counts) and two categorical fields: REASON (loan purpose) and JOB (employment category). Therefore, we converted the categorical variables to factors and dummy-encoded them for modeling.
 
 The target variable, BAD, indicates whether a client defaulted on their loan (1) or not (0). We first look at its distribution to understand the class balance, which is crucial for model training:
 
-```{r eda-BAD_distribution}
+```{r eda-BAD-distribution, fig.cap="Distributions of target variable BAD", fig.align='center', fig.width=6, fig.height=3}
 ################################################################################
 # distribution of target variable
 hmeq %>%
@@ -91,11 +93,13 @@ hmeq %>%
     theme_minimal()
 
 ```
-The plot shows a clear class imbalance: roughly 80 % of loans in the HMEQ dataset did not default (BAD = 0) while only about 20 % did (BAD = 1). Such a skew means that a naïve model could achieve high accuracy simply by predicting “no default” most of the time, so we’ll need to use more robust metrics (like AUC) and consider resampling or class-weighting to properly train our XGBoost model.
+
+The plot shows a clear class imbalance: roughly 80 % of loans in the HMEQ dataset did not default (BAD = 0) while only about 20 % did (BAD = 1).
+Such a skew means that a naïve model could achieve high accuracy simply by predicting “no default” most of the time, so we’ll need to use more robust metrics (like AUC) and consider resampling or class-weighting to properly train our XGBoost model.
 
 Now, we look at the distribution of numeric and categorical variables to understand their characteristics and potential transformations needed for modeling.
 
-```{r eda-nums_distribution}
+```{r eda-nums-distribution, fig.cap="Distribution of all numeric variables", fig.align='center', fig.width=6, fig.height=5}
 ################################################################################
 # numeric variables
 numeric_vars <- hmeq %>% select(where(is.numeric)) %>% names()
@@ -111,9 +115,10 @@ hmeq %>%
 
 ```
 
-The histograms show that none of the numeric variables obey a normal distribution. Most features are heavily right‐skewed with long tails. To address this, we will apply normalization to put all predictors on a similar scale, and we should also consider a log transform.
+The histograms show that none of the numeric variables obey a normal distribution. Most features are heavily right‐skewed with long tails.
+To address this, we will apply normalization to put all predictors on a similar scale, and we should also consider a log transform.
 
-```{r cats_distribution}
+```{r cats-distribution, fig.cap="Distributions of categorical variables", fig.align='center', fig.width=6, fig.height=3}
 ################################################################################
 # categorical variables
 categorical_vars <- hmeq %>% 
@@ -133,10 +138,12 @@ hmeq %>%
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ```
+
 Occupations are highly uneven: nearly 40 % of borrowers fall into the “Other” category. The loan REASON is even more concentrated: around two‐thirds went to debt consolidation, about 30 % to home improvement, and only a few percent have no recorded purpose.
 
 Now let's deal with the missing values in the dataset:
-```{r eda-checking_NAs}
+
+```{r eda-checking-NAs}
 ################################################################################
 # missing values
 missing_values <- hmeq %>%
@@ -151,7 +158,7 @@ Oops, there're plenty of NAs in the original dataset, if we drop them directly, 
 
 A correlation heatmap can help us undertand the relationships between variables, identifying potential multicollinearity issues and interactions that we might want to include in our models:
 
-```{r eda-correlation_between_nums}
+```{r eda-correlation-between-nums, fig.cap="Heatmap of all numeric variables", fig.align='center', fig.width=6, fig.height=3}
 ################################################################################
 # correlation between numeric predictors
 num_df <- hmeq %>% 
@@ -165,9 +172,12 @@ corrplot(corr, method = "color", type = "lower", tl.cex = 0.8)
 
 The correlation heatmap shows several relationships among the numeric variables. These observed correlations justify our decision to include interaction terms in the high‐dimensional Lasso model. By adding pairwise products of related variables, we give the model a chance to capture joint effects that simple main‐effect terms might miss.
 
+# Modeling and Evaluation
+
 ## Baseline Model
 
-We begin with a **logistic‐regression** baseline. We chose it for its interpretability and natural fit to our binary “default” outcome, so that we can immediately see how each factor drives the odds of loan failure. Rather than hand‐picking a few features, we use every cleaned predictor in the HMEQ data. That means all continuous financial signals (loan amount, property value, credit‐history length, debt ratios, delinquency counts, etc.) and the two categorical fields REASON (loan purpose) and JOB (employment category), which we’ve converted to factors and dummy‐encoded.
+We begin with a **logistic‐regression** baseline. We chose it for its interpretability and natural fit to our binary “default” outcome, so that we can immediately see how each factor drives the odds of loan failure.
+Rather than hand‐picking a few features, we use every cleaned predictor in the HMEQ data. That means all continuous financial signals (loan amount, property value, credit‐history length, debt ratios, delinquency counts, etc.) and the two categorical fields REASON (loan purpose) and JOB (employment category), which we’ve converted to factors and dummy‐encoded.
 
 By pooling both quantitative metrics and qualitative risk signals, we capture the full spectrum of borrower characteristics that a lender would consider at first glance. We normalize all numeric inputs so each variable contributes on a comparable scale.
 
@@ -220,15 +230,16 @@ baseline_tbl <- preds %>%
   )
 
 # Print as a table
-baseline_tbl %>% 
-  kable(digits = 3, format = "html") %>% 
-  kable_styling(full_width = FALSE)
+kable(baseline_tbl)
 
 ```
 
 Even though our baseline model shows a high accuracy of 85%, it’s really just predicting “no default” almost all the time, so it hardly learns anything meaningful. It catches good loans almost perfectly (98% sensitivity) but only identifies 35% of the actual defaults (specificity), and its AUC of 0.184 tells us its ranking of risky versus safe loans is worse than random.
 
-This teaches us that with so many more non-defaults, accuracy alone tricks us. We need to focus on metrics like AUC, and recall for the minority class. As a first glance, our logistic baseline confirms that numeric and factor inputs alone, with a naïve cutoff, are insufficient to identify credit risk. But it does give us a clear benchmark, and highlights exactly where to focus our modeling refinements.
+This teaches us that with so many more non-defaults, accuracy alone tricks us.
+We need to focus on metrics like AUC, and recall for the minority class.
+As a first glance, our logistic baseline confirms that numeric and factor inputs alone, with a naïve cutoff, are insufficient to identify credit risk.
+But it does give us a clear benchmark, and highlights exactly where to focus our modeling refinements.
 
 ## Gradient Descent Model
 
@@ -247,10 +258,10 @@ $$
 
 which clearly depends on $\theta$ (so it’s **not constant**) and drives each update. We chose this loss function as it exactly matches the binary‐likelihood objective, sharply penalises over-confident errors, and yields updates that depend on how well the model currently fits each example rather than constant squared‐error.
 
-However, here requires arithmetic on $y$. If BAD were a factor, subtraction $\sigma(X\theta)-y$ would fail. Using numeric $y$ lets us compute $(p_i - y_i)$ directly, drive the updates, and measure probability errors smoothly. Similarly, to ensure smooth calculation, we'll only include numeric predictors in the design matrix $X$.
+However, here requires arithmetic on $y$. If BAD were a factor, subtraction $\sigma(X\theta)-y$ would fail. Using numeric $y$ lets us compute $(p_i - y_i)$ directly, drive the updates, and measure probability errors smoothly.
+Similarly, to ensure smooth calculation, we'll only include numeric predictors in the design matrix $X$.
 
 What's more, when dealing with NA values, here we decided to drop them instead of imputing, as we want to keep the model simple and focus on the mechanics of gradient descent. This is a trade-off, as it may lead to loss of information, but it simplifies our implementation.
-
 
 ```{r gradient-descent-model}
 ################################################################################
@@ -322,7 +333,7 @@ sensitivity <- tp / (tp + fn)
 specificity <- tn / (tn + fp)
 
 # accuracy & AUC
-accuracy <- mean(results$.pred_class == results$truth)
+accuracy_cal <- mean(results$.pred_class == results$truth)
 
 roc_obj <- roc(
   response  = results$truth,
@@ -336,20 +347,20 @@ auc_val <- as.numeric(auc(roc_obj))
 
 # build a one‐row summary table
 metrics_tbl <- tibble(
-  Accuracy    = accuracy,
+  Accuracy    = accuracy_cal,
   AUC         = auc_val,
   Sensitivity = sensitivity,
   Specificity = specificity
 )
 
 # print it
-metrics_tbl %>%
-  kable(digits = 3, format = "html") %>%
-  kable_styling(full_width = FALSE)
+kable(metrics_tbl)
 
 
 ```
-Our custom cross‐entropy model yields **94% accuracy**, an **AUC of 0.815**, **22% sensitivity** and **99% specificity**. There is a big step up from our naïve baseline that reported an AUC of 0.184 by including all predictors. This new model truly learns patterns in the data: it now ranks defaulters much better (AUC → 0.783).
+
+Our custom cross‐entropy model yields **94% accuracy**, an **AUC of 0.815**, **22% sensitivity** and **99% specificity**. There is a big step up from our naïve baseline that reported an AUC of 0.184 by including all predictors.
+This new model truly learns patterns in the data: it now ranks defaulters much better (AUC → 0.783).
 
 Again, we should keep balancing metrics rather than chasing raw accuracy, tune our decision threshold (it needn’t be 0.5), and consider richer learners (e.g. tree-based methods) to capture non-linear risk signals and further improve both sensitivity and specificity.
 
@@ -357,7 +368,8 @@ Again, we should keep balancing metrics rather than chasing raw accuracy, tune o
 
 In the hmeq dataset, the scenario of predictive models just fit a decision of whether to grant a load, so we decide to build a **decision tree model**, because it is simple, fully interpretable, and can automatically discover non‐linear splits. It serves as a clear, non‐baseline model that we can easily visualize and explain.
 
-```{r decision_tree}
+```{r decision-tree}
+################################################################################
 # tree model
 tree_spec <- decision_tree(
   mode = "classification",
@@ -395,35 +407,40 @@ tree_fit <- last_fit(final_tree_wf, data_split)
 
 # performance metrics
 kable(collect_metrics(tree_fit))
+
 ```
 
-```{r decision_tree-visualization}
+```{r decision-tree-visualization}
 # visualize the final tree
 final_tree <- tree_fit %>% extract_fit_engine()
 rpart.plot(final_tree, main = "Final Decision Tree")
+
 ```
 
-As the tree shows, the most important feature is DELINQ, which seperates the tree into left and right branches. The overall default rate is 20%. Based on whether DELINQ \< 0.084, for borrowers with no or almost no past delinquencies (80%), the default rate is 14%, while for those with any delinquency history (20%), it jumps to 45%.
+As the tree shows, the most important feature is DELINQ, which seperates the tree into left and right branches. The overall default rate is 20%. Based on whether DELINQ < 0.084, for borrowers with no or almost no past delinquencies (80%), the default rate is 14%, while for those with any delinquency history (20%), it jumps to 45%.
 
-In the left branch, the next feature is DEBTINC \< 1.6. When DEBTINC \< 1.6 (79% of that branch), the default rate is 13%; when DEBTINC ≥ 1.6 (21%), it rises to 19%. That higher‐DEBTINC group then splits on CLAGE, the lower-subgroup has a 29% default rate, and the higher-subgroup has a 61% default rate.
+In the left branch, the next feature is DEBTINC < 1.6. When DEBTINC < 1.6 (79% of that branch), the default rate is 13%; when DEBTINC > 1.6 (21%), it rises to 19%. That higher‐DEBTINC group then splits on CLAGE, the lower-subgroup has a 29% default rate, and the higher-subgroup has a 61% default rate.
 
-In the right branch, the second feature is DEBTINC \< 0.11, the very low‐DEBTINC subgroup (15%) defaults 56% of the time; the rest (85%) defaults at 24%. That 24% node further splits on DEBTINC \< 1.3, the lower‐DEBTINC group (6%) has an 18% default rate, and the very high‐DEBTINC group (1%) has a 96% default rate, while the remaining cases (8%) default 82%.
+In the right branch, the second feature is DEBTINC < 0.11, the very low‐DEBTINC subgroup (15%) defaults 56% of the time; the rest (85%) defaults at 24%. That 24% node further splits on DEBTINC < 1.3, the lower‐DEBTINC group (6%) has an 18% default rate, and the very high‐DEBTINC group (1%) has a 96% default rate, while the remaining cases (8%) default 82%.
 
-Further, when we look into the importance of every variable, the plot shows that DEBTINC is by far the most important predictor of default in our model. DELINQ is the second most important, and CLAGE ranks third. Following these, DEROG, VALUE, and LOAN each contribute moderately to the model. Finally, CLNO , NINQ , YOJ , and MORTDUE have smaller but nonzero importance.
+Further, when we look into the importance of every variable, the plot shows that DEBTINC is by far the most important predictor of default in our model.
+DELINQ is the second most important, and CLAGE ranks third. Following these, DEROG, VALUE, and LOAN each contribute moderately to the model. Finally, CLNO , NINQ , YOJ , and MORTDUE have smaller but nonzero importance.
 
-```{r decision_tree_vip}
+```{r decision-tree-vip, fig.cap="Distribution of important features from the Decision Tree Model", fig.align='center', fig.width=6, fig.height=3}
 # plot important features
 final_tree %>%
   vip(geom = "col", aesthetics = list(fill = "midnightblue", alpha = 0.8)) +
   scale_y_continuous()
-```
 
+```
 
 ## High-dim model: Lasso regression
 
 We built a high‐dimensional Lasso regression model. In our preprocessing recipe, we applied a log transform to every numeric variable. To increase dimensionality, we generated all pairwise interactions among numeric predictors. After grid tunning, the final Lasso model achieved an accuracy of 0.858, an ROC AUC of 0.831 on the test data.
 
-```{r lasso_regression}
+```{r lasso-regression}
+################################################################################
+
 # define a recipe that expands features
 highdim_rec <- recipe(BAD ~ ., data = train_data) %>%
   # impute missing values
@@ -472,12 +489,13 @@ final_lasso <- finalize_workflow(lasso_wf, best_pen) %>% last_fit(data_split)
 
 # performance metrics
 kable(collect_metrics(final_lasso))
+
 ```
 
-```{r lasso_vip}
+```{r lasso-vip}
 # plot top 20 selected features
-vip(lasso_fit, num_features = 20, geom = "point") +
-  labs(title = "Top 20 Features")
+#vip(lasso_fit, num_features = 20, geom = "point") +
+#  labs(title = "Top 20 Features")
 ```
 
 We further revealed 20 features retained by Lasso. The most important was the interaction between LOAN and VALUE. Other top predictors included the main effects LOAN and VALUE, CLAGE, and REASON_DebtCon. Several interaction terms also contributed substantially, such as LOAN × DELINQ and DELINQ × DEBTINC.
@@ -486,9 +504,11 @@ However, it is noticed that the performance metrics of Lasso is not as strong as
 
 ## A prediction competition winner model:
 
-To win the prediction competition, we fit two models (i.e,,random forest and XGBoost) to focus purely on predictive accuracy.
+To win the prediction competition, we fit two models (i.e,,random forest and XGBoost) to focus purely on AUC-ROC metric.
 
-```{r random_forest}
+Below is the table for random forest model: 
+
+```{r random-forest}
 # model specification 
 rf_spec <- rand_forest(
   mode    = "classification",
@@ -527,7 +547,9 @@ final_rf <- finalize_workflow(rf_wf, best_rf) %>% last_fit(data_split)
 kable(collect_metrics(final_rf))
 ```
 
-The random forest model gets an accuracy of 0.9220 and its ROC_AUC is 0.9627, indicating an excellent classification accuracy and reliable predictions.
+The random forest model gets an accuracy of 0.92 and its ROC_AUC is 0.96, indicating an excellent classification accuracy and reliable predictions.
+
+Below shows the table for XGBoost model:
 
 ```{r xgboost}
 #XGBoost
@@ -571,17 +593,29 @@ final_xgb <- finalize_workflow(xgb_wf, best_xgb) %>% last_fit(data_split)
 kable(collect_metrics(final_xgb))
 ```
 
-The XGBoost model achieved an accuracy of 0.9195 and a ROC_AUC of 0.9396, while slightly lower than RF model, it also performed well.
-
-
+The XGBoost model achieved an accuracy of 0.92 and a ROC_AUC of 0.94, while slightly lower than RF model, it also performed well.
 
 # Conclusion
 
+Across our suite of models on the HMEQ dataset, we see a clear progression from simple to complex learners, and corresponding gains in real predictive power. Our baseline logistic regression, which used every predictor (both numeric and dummy-encoded categorical) but applied a naïve 0.5 cutoff, delivered an apparent accuracy of 85.1 % yet failed to distinguish defaulters (AUC = 0.184, specificity = 0.349). Introducing our gradient-descent model sharply improved ranking performance (AUC = 0.815) and raised true-default detection from 35% to nearly 100% specificity, demonstrating that even a hand-rolled optimizer, when properly scaled and tuned, can learn meaningful patterns.
 
+The decision tree struck a balance between interpretability and non-linear flexibility, yielding an AUC of 0.874 and accuracy of 88.6% by automatically discovering splits on delinquency, debt-to-income and credit-age. While our high-dimensional Lasso (with log transforms and all pairwise interactions) reached a respectable AUC of 0.831, its linear boundaries proved less adept at capturing complex borrower-risk contours than the tree. Finally, our competition-winning ensemble learners: Random Forest (AUC = 0.964) and XGBoost (AUC = 0.944) offered the highest predictive accuracy and AUC, confirming the value of gradient-boosted and bagged trees for this problem.
 
+Throughout the project we encountered several challenage:
+
+1.  severe class imbalance caused raw accuracy misleading and forced us to prioritise AUC (and to experiment with threshold tuning);
+
+2.  missing values in both numeric and categorical fields required us to move beyond simple row-drops to imputation within our tidymodels recipes;
+
+3.  the custom gradient-descent implementation demanded careful feature-scaling and learning-rate tuning to avoid degenerating into trivial all-ones predictions;
+
+From these efforts we conclude that interpretable learners, such as our baseline logistic model and decision tree, provide invaluable diagnostic insights into which factors drive default risk, while ensemble methods like random forests and XGBoost deliver superior predictive power by capturing non-linear interactions. Moreover, choosing the right evaluation metric (particularly AUC-ROC measures) is essential when defaults are rare.
+
+Looking ahead, future work should explore cost-sensitive learning or utility-based thresholds to better penalise false negatives. By uniting transparent, interpretable modeling with state-of-the-art learners and rigorous evaluation, this work lays the groundwork for operational credit-scoring systems that balance transparency, accuracy and real-world cost trade-offs.
 
 
 \clearpage
+
 # Code appendix
 
 ```{r ref.label = knitr::all_labels(), echo=TRUE, eval=FALSE}
