@@ -82,7 +82,7 @@ During initial data exploration, we found that the Home Equity dataset comprises
 
 The target variable, BAD, indicates whether a client defaulted on their loan (1) or not (0). We first look at its distribution to understand the class balance, which is crucial for model training:
 
-```{r eda-BAD-distribution, fig.cap="Distributions of target variable BAD", fig.align='center', fig.width=6, fig.height=3}
+```{r eda-BAD-distribution, fig.cap="Distributions of target variable BAD", fig.align='center', fig.width=4, fig.height=2}
 ################################################################################
 # distribution of target variable
 hmeq %>%
@@ -94,12 +94,11 @@ hmeq %>%
 
 ```
 
-The plot shows a clear class imbalance: roughly 80 % of loans in the HMEQ dataset did not default (BAD = 0) while only about 20 % did (BAD = 1).
-Such a skew means that a naïve model could achieve high accuracy simply by predicting “no default” most of the time, so we’ll need to use more robust metrics (like AUC) and consider resampling or class-weighting to properly train our XGBoost model.
+The plot shows a clear class imbalance: roughly 80 % of loans in the HMEQ dataset did not default (BAD = 0) while only about 20% did (BAD = 1). Such a skew means that a naïve model could achieve high accuracy simply by predicting “no default” most of the time, so we’ll need to use more robust metrics (like AUC) and consider resampling or class-weighting to properly train our XGBoost model.
 
 Now, we look at the distribution of numeric and categorical variables to understand their characteristics and potential transformations needed for modeling.
 
-```{r eda-nums-distribution, fig.cap="Distribution of all numeric variables", fig.align='center', fig.width=6, fig.height=5}
+```{r eda-nums-distribution, fig.cap="Distribution of all numeric variables", fig.align='center', fig.width=6, fig.height=4}
 ################################################################################
 # numeric variables
 numeric_vars <- hmeq %>% select(where(is.numeric)) %>% names()
@@ -115,8 +114,7 @@ hmeq %>%
 
 ```
 
-The histograms show that none of the numeric variables obey a normal distribution. Most features are heavily right‐skewed with long tails.
-To address this, we will apply normalization to put all predictors on a similar scale, and we should also consider a log transform.
+The histograms show that none of the numeric variables obey a normal distribution. Most features are heavily right‐skewed with long tails. To address this, we will apply normalization to put all predictors on a similar scale, and we should also consider a log transform.
 
 ```{r cats-distribution, fig.cap="Distributions of categorical variables", fig.align='center', fig.width=6, fig.height=3}
 ################################################################################
@@ -158,7 +156,7 @@ Oops, there're plenty of NAs in the original dataset, if we drop them directly, 
 
 A correlation heatmap can help us undertand the relationships between variables, identifying potential multicollinearity issues and interactions that we might want to include in our models:
 
-```{r eda-correlation-between-nums, fig.cap="Heatmap of all numeric variables", fig.align='center', fig.width=6, fig.height=3}
+```{r eda-correlation-between-nums, fig.cap="Heatmap of all numeric variables", fig.align='center', fig.width=6, fig.height=4}
 ################################################################################
 # correlation between numeric predictors
 num_df <- hmeq %>% 
@@ -176,8 +174,7 @@ The correlation heatmap shows several relationships among the numeric variables.
 
 ## Baseline Model
 
-We begin with a **logistic‐regression** baseline. We chose it for its interpretability and natural fit to our binary “default” outcome, so that we can immediately see how each factor drives the odds of loan failure.
-Rather than hand‐picking a few features, we use every cleaned predictor in the HMEQ data. That means all continuous financial signals (loan amount, property value, credit‐history length, debt ratios, delinquency counts, etc.) and the two categorical fields REASON (loan purpose) and JOB (employment category), which we’ve converted to factors and dummy‐encoded.
+We begin with a **logistic‐regression** baseline. We chose it for its interpretability and natural fit to our binary “default” outcome, so that we can immediately see how each factor drives the odds of loan failure. Rather than hand‐picking a few features, we use every cleaned predictor in the HMEQ data. That means all continuous financial signals (loan amount, property value, credit‐history length, debt ratios, delinquency counts, etc.) and the two categorical fields REASON (loan purpose) and JOB (employment category), which we’ve converted to factors and dummy‐encoded.
 
 By pooling both quantitative metrics and qualitative risk signals, we capture the full spectrum of borrower characteristics that a lender would consider at first glance. We normalize all numeric inputs so each variable contributes on a comparable scale.
 
@@ -258,8 +255,7 @@ $$
 
 which clearly depends on $\theta$ (so it’s **not constant**) and drives each update. We chose this loss function as it exactly matches the binary‐likelihood objective, sharply penalises over-confident errors, and yields updates that depend on how well the model currently fits each example rather than constant squared‐error.
 
-However, here requires arithmetic on $y$. If BAD were a factor, subtraction $\sigma(X\theta)-y$ would fail. Using numeric $y$ lets us compute $(p_i - y_i)$ directly, drive the updates, and measure probability errors smoothly.
-Similarly, to ensure smooth calculation, we'll only include numeric predictors in the design matrix $X$.
+However, here requires arithmetic on $y$. If BAD were a factor, subtraction $\sigma(X\theta)-y$ would fail. Using numeric $y$ lets us compute $(p_i - y_i)$ directly, drive the updates, and measure probability errors smoothly. Similarly, to ensure smooth calculation, we'll only include numeric predictors in the design matrix $X$.
 
 What's more, when dealing with NA values, here we decided to drop them instead of imputing, as we want to keep the model simple and focus on the mechanics of gradient descent. This is a trade-off, as it may lead to loss of information, but it simplifies our implementation.
 
@@ -359,8 +355,7 @@ kable(metrics_tbl)
 
 ```
 
-Our custom cross‐entropy model yields **94% accuracy**, an **AUC of 0.815**, **22% sensitivity** and **99% specificity**. There is a big step up from our naïve baseline that reported an AUC of 0.184 by including all predictors.
-This new model truly learns patterns in the data: it now ranks defaulters much better (AUC → 0.783).
+Our custom cross‐entropy model yields **94% accuracy**, an **AUC of 0.815**, **22% sensitivity** and **99% specificity**. There is a big step up from our naïve baseline that reported an AUC of 0.184 by including all predictors. This new model truly learns patterns in the data: it now ranks defaulters much better (AUC → 0.783).
 
 Again, we should keep balancing metrics rather than chasing raw accuracy, tune our decision threshold (it needn’t be 0.5), and consider richer learners (e.g. tree-based methods) to capture non-linear risk signals and further improve both sensitivity and specificity.
 
@@ -410,7 +405,7 @@ kable(collect_metrics(tree_fit))
 
 ```
 
-```{r decision-tree-visualization}
+```{r decision-tree-visualization, fig.cap="Decision Tree plot", fig.align='center', fig.width=6, fig.height=3}
 # visualize the final tree
 final_tree <- tree_fit %>% extract_fit_engine()
 rpart.plot(final_tree, main = "Final Decision Tree")
@@ -423,16 +418,17 @@ In the left branch, the next feature is DEBTINC < 1.6. When DEBTINC < 1.6 (79% o
 
 In the right branch, the second feature is DEBTINC < 0.11, the very low‐DEBTINC subgroup (15%) defaults 56% of the time; the rest (85%) defaults at 24%. That 24% node further splits on DEBTINC < 1.3, the lower‐DEBTINC group (6%) has an 18% default rate, and the very high‐DEBTINC group (1%) has a 96% default rate, while the remaining cases (8%) default 82%.
 
-Further, when we look into the importance of every variable, the plot shows that DEBTINC is by far the most important predictor of default in our model.
-DELINQ is the second most important, and CLAGE ranks third. Following these, DEROG, VALUE, and LOAN each contribute moderately to the model. Finally, CLNO , NINQ , YOJ , and MORTDUE have smaller but nonzero importance.
+Further, when we look into the importance of every variable, the plot shows that DEBTINC is by far the most important predictor of default in our model. DELINQ is the second most important, and CLAGE ranks third. Following these, DEROG, VALUE, and LOAN each contribute moderately to the model. Finally, CLNO , NINQ , YOJ , and MORTDUE have smaller but nonzero importance.
 
-```{r decision-tree-vip, fig.cap="Distribution of important features from the Decision Tree Model", fig.align='center', fig.width=6, fig.height=3}
+```{r decision-tree-vip, fig.cap="Distribution of important features from the Decision Tree Model", fig.align='center', fig.width=5, fig.height=2.5}
 # plot important features
 final_tree %>%
   vip(geom = "col", aesthetics = list(fill = "midnightblue", alpha = 0.8)) +
   scale_y_continuous()
 
 ```
+
+\clearpage
 
 ## High-dim model: Lasso regression
 
@@ -492,10 +488,12 @@ kable(collect_metrics(final_lasso))
 
 ```
 
-```{r lasso-vip}
+```{r lasso-vip, fig.cap="Distribution of important features from the Lasso Regression Model", fig.align='center', fig.width=6, fig.height=4}
 # plot top 20 selected features
-#vip(lasso_fit, num_features = 20, geom = "point") +
-#  labs(title = "Top 20 Features")
+lasso_fit <- final_lasso$.workflow[[1]] %>%
+  extract_fit_parsnip()
+
+vip(lasso_fit, num_features = 20, geom = "point") + labs(title = "Top 20 Features")
 ```
 
 We further revealed 20 features retained by Lasso. The most important was the interaction between LOAN and VALUE. Other top predictors included the main effects LOAN and VALUE, CLAGE, and REASON_DebtCon. Several interaction terms also contributed substantially, such as LOAN × DELINQ and DELINQ × DEBTINC.
@@ -509,6 +507,7 @@ To win the prediction competition, we fit two models (i.e,,random forest and XGB
 Below is the table for random forest model: 
 
 ```{r random-forest}
+################################################################################
 # model specification 
 rf_spec <- rand_forest(
   mode    = "classification",
@@ -552,6 +551,7 @@ The random forest model gets an accuracy of 0.92 and its ROC_AUC is 0.96, indica
 Below shows the table for XGBoost model:
 
 ```{r xgboost}
+################################################################################
 #XGBoost
 # model specification
 xgb_spec <- boost_tree(
